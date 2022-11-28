@@ -1,0 +1,2149 @@
+---
+title: "Mawi vs. Frozen Stool Data"
+author: "Rigel Sison"
+date: "1/4/2022"
+output: html_document
+---
+
+```{r}
+# Load packages
+necessary_packages <-  c("directlabels", "knitr", "clustsig", "ellipse", "phyloseq", "ggplot2", "plyr", "vegan", "reshape2", "ampvis2", "DESeq2", "gtable", "gridExtra", "grid", "Biostrings", "data.table", "labdsv", "ape", "multcompView")
+packages <- lapply(necessary_packages, library, character.only = TRUE)
+#("biomformat)
+library(dplyr)
+library(decontam)
+library("RColorBrewer")
+library("magrittr")
+library("scales")
+library("randomForest")
+library(ggtern)
+library(tidyr)
+library(viridis)
+library(cowplot)
+library(tidyverse) # Easily Install and Load the 'Tidyverse'.
+library(coin) # Conditional Inference Procedures in a Permutation Test Framework.
+library(reshape2) # Flexibly Reshape Data: A Reboot of the Reshape Package.
+library(ggnewscale)
+library(VennDiagram)
+library(gplots)
+library(tibble)
+```
+
+```{r}
+table <- read.table(file = 'frozen_v_mawi.tsv', sep = '\t', header = TRUE)
+copy <- table
+rownames(copy) <- c(1:733)
+rownames(copy)[1:9] <- paste0("00", rownames(copy)[1:9])
+rownames(copy)[10:99] <- paste0("0", rownames(copy)[10:99])
+rownames(copy) <- paste0("ST_", rownames(copy))
+colnames(copy) <- gsub('MP_','', colnames(copy))
+```
+
+```{r}
+final <- copy
+st.phylo <- final[, 2:8]
+st.counts <- final[, 9:74]
+st.counts <- trunc(st.counts)
+```
+
+```{r}
+st.counts.t <- t(st.counts)
+
+map <- read.table("map_frozen_mawi.txt", header=TRUE, fill = TRUE)
+map$Date <- as.POSIXct(map$Date,
+                       format = "%Y-%m-%d")
+rownames(map) <- map[,1]
+map.samp <- map[,2:ncol(map)]
+map.samp <- map.samp[rownames(st.counts.t),]
+
+identical(rownames(st.counts.t),rownames(map))
+
+st.phylo <- as.matrix(st.phylo)
+
+class(st.counts.t) <- "numeric"
+
+OTU <- otu_table(st.counts, taxa_are_rows = TRUE)
+TAX <- tax_table(st.phylo)
+META <- sample_data(map)
+st.physeq <- phyloseq(OTU, TAX, META)
+
+```
+
+```{r}
+#ex1 = prune_taxa(row.names.remove, st.physeq)
+```
+
+```{r}
+
+sum(taxa_sums(st.physeq) == 0)
+sum(taxa_sums(st.physeq) == 1) #7
+sum(taxa_sums(st.physeq) == 2) #13
+sum(taxa_sums(st.physeq) == 3) #11
+
+st.physeq.f <- filter_taxa(st.physeq, function(x) sum(x > 3) > (0.02*length(x)), TRUE)
+
+```
+
+Subset the phyloseq data by RNA and DNA
+
+```{r}
+
+st.physeq.dna <- subset_samples(st.physeq.f, Nucleic.Acid == "DNA")
+st.physeq.rna <- subset_samples(st.physeq.f, Nucleic.Acid == "RNA")
+
+```
+
+```{r}
+library(MicrobiotaProcess)
+vennlist <- get_vennlist(obj=st.physeq.dna, factorNames="Type")
+ItemsList<- venn(vennlist, show.plot = FALSE)
+intersections<- attributes(ItemsList)$intersections
+detach("package:MicrobiotaProcess", unload = TRUE)
+```
+
+```{r}
+#filter OTUs not present in both day 0 samples across Mawi and Frozen
+row.names.remove <- c(intersections$Mawi, intersections$Frozen)
+copy.f <- copy[!(rownames(copy) %in% row.names.remove), ]
+```
+
+```{r}
+final <- copy.f
+st.phylo <- final[, 2:8]
+st.counts <- final[, 9:74]
+st.counts <- trunc(st.counts)
+```
+
+```{r}
+st.counts.t <- t(st.counts)
+map <- read.table("map_frozen_mawi.txt", header=TRUE, fill = TRUE)
+rownames(map) <- map[,1]
+map.samp <- map[,2:ncol(map)]
+map.samp <- map.samp[rownames(st.counts.t),]
+
+identical(rownames(st.counts.t),rownames(map))
+
+st.phylo <- as.matrix(st.phylo)
+
+class(st.counts.t) <- "numeric"
+
+OTU <- otu_table(st.counts, taxa_are_rows = TRUE)
+TAX <- tax_table(st.phylo)
+META <- sample_data(map)
+st.physeq <- phyloseq(OTU, TAX, META)
+
+```
+
+```{r}
+
+sum(taxa_sums(st.physeq) == 0)
+sum(taxa_sums(st.physeq) == 1) #7
+sum(taxa_sums(st.physeq) == 2) #13
+sum(taxa_sums(st.physeq) == 3) #11
+
+st.physeq.f <- filter_taxa(st.physeq, function(x) sum(x > 3) > (0.02*length(x)), TRUE)
+
+```
+
+Subset the phyloseq data by RNA and DNA
+
+```{r}
+
+st.physeq.dna <- subset_samples(st.physeq.f, Nucleic.Acid == "DNA")
+st.physeq.rna <- subset_samples(st.physeq.f, Nucleic.Acid == "RNA")
+
+```
+
+```{r}
+
+sample_data(st.physeq.f)$Nucleic.Acid <- factor(sample_data(st.physeq.f)$Nucleic.Acid, levels = c('RNA', 'DNA'))
+
+df <- data.frame(sample_data(st.physeq.f))
+df$LibrarySize <- sample_sums(st.physeq.f)
+df <- df[order(df$LibrarySize),]
+df$ID <- seq(nrow(df))
+
+p_ls_nucleic.acid <- ggplot(data = df, aes(x=ID, y=LibrarySize, color=Nucleic.Acid)) + geom_point() +
+  scale_color_manual(values = c('RNA' = 'black', 'DNA' = 'red'))
+
+```
+
+
+
+Venn Diagrams
+```{r}
+
+st.physeq.dna.day_0 <- subset_samples(st.physeq.dna, Day == "0")
+st.physeq.dna.day_3 <- subset_samples(st.physeq.dna, Day == "3")
+st.physeq.dna.day_7 <- subset_samples(st.physeq.dna, Day == "7")
+st.physeq.dna.day_14 <- subset_samples(st.physeq.dna, Day == "14")
+st.physeq.dna.day_21 <- subset_samples(st.physeq.dna, Day == "21")
+st.physeq.dna.day_40 <- subset_samples(st.physeq.dna, Day == "40")
+library(MicrobiotaProcess)
+vennlist <- get_vennlist(obj=st.physeq.dna.day_0, factorNames="Type")
+vennp.day_0 <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      fill=c("#00AED7", "#FD9347"),
+                      cat.col=c("#00AED7", "#FD9347"),
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+
+vennlist <- get_vennlist(obj=st.physeq.dna.day_3, factorNames="Type")
+vennp.day_3 <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      fill=c("#00AED7", "#FD9347"),
+                      cat.col=c("#00AED7", "#FD9347"),
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+
+vennlist <- get_vennlist(obj=st.physeq.dna.day_7, factorNames="Type")
+vennp.day_7 <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      fill=c("#00AED7", "#FD9347"),
+                      cat.col=c("#00AED7", "#FD9347"),
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+
+vennlist <- get_vennlist(obj=st.physeq.dna.day_14, factorNames="Type")
+vennp.day_14 <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      fill=c("#00AED7", "#FD9347"),
+                      cat.col=c("#00AED7", "#FD9347"),
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+
+vennlist <- get_vennlist(obj=st.physeq.dna.day_21, factorNames="Type")
+vennp.day_21 <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      fill=c("#00AED7", "#FD9347"),
+                      cat.col=c("#00AED7", "#FD9347"),
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+
+vennlist <- get_vennlist(obj=st.physeq.dna.day_40, factorNames="Type")
+vennp.day_40 <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      fill=c("#00AED7", "#FD9347"),
+                      cat.col=c("#00AED7", "#FD9347"),
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+
+detach("package:MicrobiotaProcess", unload = TRUE)
+```
+
+```{r}
+
+sample_data(st.physeq.dna)$Type <- factor(sample_data(st.physeq.dna)$Type, levels = c('Frozen', 'Mawi'))
+
+df <- 
+  data.frame(sample_data(st.physeq.dna))
+df$LibrarySize <- sample_sums(st.physeq.dna)
+df <- df[order(df$LibrarySize),]
+df$ID <- seq(nrow(df))
+
+p_ls_dna.type <- ggplot(data = df, aes(x=ID, y=LibrarySize, color=Type)) + geom_point() +
+  scale_color_manual(values = c('Frozen' = '#6BA7CC', 'Mawi' = '#ff6600'))
+
+p_ls_dna.type
+ggsave("library_size_dna.pdf",
+       width = 6,
+       height = 4,
+       units = "in")
+```
+
+```{r}
+
+sample_data(st.physeq.rna)$Type <- factor(sample_data(st.physeq.rna)$Type, levels = c('Frozen', 'Mawi'))
+
+df <- 
+  data.frame(sample_data(st.physeq.rna))
+df$LibrarySize <- sample_sums(st.physeq.rna)
+df <- df[order(df$LibrarySize),]
+df$ID <- seq(nrow(df))
+
+p_ls_rna.type <- ggplot(data = df, aes(x=ID, y=LibrarySize, color=Type)) + geom_point() +
+  scale_color_manual(values = c('Frozen' = '#6BA7CC', 'Mawi' = '#ff6600'))
+
+p_ls_rna.type
+```
+
+```{r}
+
+sample_data(st.physeq)$Type <- factor(sample_data(st.physeq)$Type, levels = c('Frozen', 'Mawi'))
+
+df <- data.frame(sample_data(st.physeq))
+df$LibrarySize <- sample_sums(st.physeq)
+df <- df[order(df$LibrarySize),]
+df$ID <- seq(nrow(df))
+
+p_ls <- ggplot(data = df, aes(x=ID, y=LibrarySize, color=Type, shape=Nucleic.Acid)) + 
+  geom_point(size = 2) +
+  scale_color_manual(values = c('Frozen' = '#6BA7CC', 'Mawi' = '#ff6600'))
+
+p_ls
+ggsave("library_size.pdf",
+       width = 6,
+       height = 4,
+       units = "in")
+
+write.csv(df, "library_size.csv", row.names = FALSE)
+```
+
+```{r}
+
+set.seed(13)
+st.physeq.fr = rarefy_even_depth(st.physeq.f, sample.size = 300000, rngseed = TRUE)
+
+```
+
+```{r}
+#library(patchwork)
+#set.seed(13)
+#rareres <- get_rarecurve(obj = st.physeq.fr)
+#p_rare <- ggrarecurve(obj = rareres,
+#                      indexNames = c("Observe"),
+#                      )
+```
+
+Bray-Curtis NMDS
+```{r}
+
+set.seed(13)
+# Ordinate
+st.physeq.nmds.bray <- ordinate(
+  physeq = st.physeq.fr,
+  method = 'NMDS',
+  distance = 'bray'
+)
+
+bray_ord <- phyloseq::distance(physeq = st.physeq.fr, method = 'bray')
+
+df_ord <- data.frame(sample_data(st.physeq.fr))
+adonis(bray_ord ~ Nucleic.Acid, data = df_ord)
+
+beta <- betadisper(bray_ord, df_ord$Nucleic.Acid)
+permutest(beta)
+
+nmds.bray <- plot_ordination(
+  physeq = st.physeq.fr,
+  ordination <- st.physeq.nmds.bray,
+  color = 'Nucleic.Acid',
+  shape = 'Type',
+  title = 'nMDS of Bacterial Communities in Stool Samples (Bray-Curtis)'
+) +
+  scale_color_manual(values = c('#8B008B', '#00008B')) +
+  geom_point(aes(color = Nucleic.Acid), size = 3) +
+  theme(plot.title = element_text(hjust = 0.5)) 
+```
+
+```{r}
+
+set.seed(13)
+st.physeq.dna.r = rarefy_even_depth(st.physeq.dna, sample.size = 300000, rngseed = TRUE)
+
+set.seed(13)
+# Ordinate
+st.physeq.nmds.bray.dna <- ordinate(
+  physeq = st.physeq.dna.r,
+  method = 'NMDS',
+  distance = 'bray'
+)
+
+bray_ord <- phyloseq::distance(physeq = st.physeq.dna.r, method = 'bray')
+
+df_ord <- data.frame(sample_data(st.physeq.dna.r))
+adonis(bray_ord ~ Type, data = df_ord)
+adonis(bray_ord ~ Day, data = df_ord)
+adonis(bray_ord ~ Pool, data = df_ord)
+adonis(bray_ord ~ Type + Day + Pool, data = df_ord)
+
+beta <- betadisper(bray_ord, df_ord$Type)
+permutest(beta)
+
+nmds.bray.dna <- plot_ordination(
+  physeq = st.physeq.dna.r,
+  ordination <- st.physeq.nmds.bray.dna,
+  color = 'Nucleic.Acid',
+  title = 'nMDS of Bacterial Communities in Stool DNA Samples (Bray-Curtis)'
+) +
+  scale_color_manual(values = c('Frozen' = 'blue', 'Mawi' = '#ff6600')) +
+  geom_point(aes(color = Type), size = 3) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  annotate("text", x = 0.225, y = 0.1, label = "\n Stress=0.15\n Adonis\n R^2=0.12\n p=0.001")
+  
+```
+
+```{r}
+
+set.seed(13)
+st.physeq.rna.r = rarefy_even_depth(st.physeq.rna, sample.size = 300000, rngseed = TRUE)
+
+set.seed(13)
+# Ordinate
+st.physeq.nmds.bray.rna <- ordinate(
+  physeq = st.physeq.rna.r,
+  method = 'NMDS',
+  distance = 'bray'
+)
+
+bray_ord <- phyloseq::distance(physeq = st.physeq.rna.r, method = 'bray')
+
+df_ord <- data.frame(sample_data(st.physeq.rna.r))
+adonis(bray_ord ~ Type, data = df_ord)
+
+beta <- betadisper(bray_ord, df_ord$Type)
+permutest(beta)
+
+nmds.bray.rna <- plot_ordination(
+  physeq = st.physeq.rna.r,
+  ordination <- st.physeq.nmds.bray.rna,
+  color = 'Nucleic.Acid',
+  title = 'nMDS of Bacterial Communities in Stool RNA Samples (Bray-Curtis)'
+) +
+  scale_color_manual(values = c('Frozen' = 'blue', 'Mawi' = '#ff6600')) +
+  geom_point(aes(color = Type), size = 3) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+All Bray-Curtis NMDS plots
+
+```{r}
+#nmds.bray
+nmds.bray.dna
+ggsave("nmds_bray_dna_all.png",
+       width = 6.5,
+       height = 4,
+       units = "in")
+#nmds.bray.rna
+```
+
+Jaccard NMDS
+```{r}
+
+set.seed(13)
+# Ordinate
+st.physeq.nmds.jaccard <- ordinate(
+  physeq = st.physeq.fr,
+  method = 'NMDS',
+  distance = 'jaccard'
+)
+
+jaccard_ord <- phyloseq::distance(physeq = st.physeq.fr, method = 'jaccard')
+
+df_ord <- data.frame(sample_data(st.physeq.fr))
+adonis(jaccard_ord ~ Nucleic.Acid, data = df_ord)
+
+beta <- betadisper(jaccard_ord, df_ord$Nucleic.Acid)
+permutest(beta)
+
+nmds.jaccard <- plot_ordination(
+  physeq = st.physeq.fr,
+  ordination <- st.physeq.nmds.jaccard,
+  color = 'Nucleic.Acid',
+  shape = 'Type',
+  title = 'nMDS of Bacterial Communities in Stool Samples (Jaccard)'
+) +
+  scale_color_manual(values = c('#8B008B', '#00008B')) +
+  geom_point(aes(color = Nucleic.Acid), size = 3) +
+  theme(plot.title = element_text(hjust = 0.5)) 
+```
+
+```{r}
+
+set.seed(13)
+# Ordinate
+st.physeq.nmds.jaccard.dna <- ordinate(
+  physeq = st.physeq.dna.r,
+  method = 'NMDS',
+  distance = 'jaccard'
+)
+
+jaccard_ord <- phyloseq::distance(physeq = st.physeq.dna.r, method = 'jaccard')
+
+df_ord <- data.frame(sample_data(st.physeq.dna.r))
+adonis(jaccard_ord ~ Type, data = df_ord)
+
+beta <- betadisper(jaccard_ord, df_ord$Type)
+permutest(beta)
+
+nmds.jaccard.dna <- plot_ordination(
+  physeq = st.physeq.dna.r,
+  ordination <- st.physeq.nmds.jaccard.dna,
+  color = 'Nucleic.Acid',
+  title = 'nMDS of Bacterial Communities in Stool DNA Samples (Jaccard)'
+) +
+  scale_color_manual(values = c('Frozen' = 'blue', 'Mawi' = '#ff6600')) +
+  geom_point(aes(color = Type), size = 3) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  annotate("text", x = 0.3, y = 0.15, label = "\n Stress=0.15\n Adonis\n R^2=0.11\n p=0.001")
+  
+```
+
+```{r}
+
+set.seed(13)
+# Ordinate
+st.physeq.nmds.jaccard.rna <- ordinate(
+  physeq = st.physeq.rna.r,
+  method = 'NMDS',
+  distance = 'jaccard'
+)
+
+jaccard_ord <- phyloseq::distance(physeq = st.physeq.rna.r, method = 'jaccard')
+
+df_ord <- data.frame(sample_data(st.physeq.rna.r))
+adonis(jaccard_ord ~ Type, data = df_ord)
+
+beta <- betadisper(jaccard_ord, df_ord$Type)
+permutest(beta)
+
+nmds.jaccard.rna <- plot_ordination(
+  physeq = st.physeq.rna.r,
+  ordination <- st.physeq.nmds.jaccard.rna,
+  color = 'Nucleic.Acid',
+  title = 'nMDS of Bacterial Communities in Stool RNA Samples (Jaccard)'
+) +
+  scale_color_manual(values = c('Frozen' = 'blue', 'Mawi' = '#ff6600')) +
+  geom_point(aes(color = Type), size = 3) +
+  theme(plot.title = element_text(hjust = 0.5)) 
+```
+All Jaccard NMDS plots
+
+```{r}
+#nmds.jaccard
+nmds.jaccard.dna
+ggsave("nmds_jaccard_dna_all.png",
+       width = 6,
+       height = 4,
+       units = "in")
+#nmds.jaccard.rna
+```
+
+Distance Comparison across time points (Bray-Curtis)
+
+```{r}
+
+# T0 vs T3, Mawi, DNA, Bray
+
+st.physeq.dna.t0_3.mawi <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '0' | Type == 'Mawi' & Day == '3')
+dist.dna.t0_3.mawi <- phyloseq::distance(physeq = st.physeq.dna.t0_3.mawi, method = 'bray')
+dist.dna.t0_3.mawi.df <- 
+  matrix(dist.dna.t0_3.mawi)
+dist.dna.t0_3.mawi.list <- reshape2::melt(dist.dna.t0_3.mawi.df)[reshape2::melt(upper.tri(dist.dna.t0_3.mawi.df))$value,]
+names(dist.dna.t0_3.mawi.list) <- c("c1", "c2", "distance")
+dist.dna.t0_3.mawi.list <- cbind(dist.dna.t0_3.mawi.list, "comp" = "T0_vs_T03", "type" = "Mawi")
+
+# T0 vs T7, Mawi, DNA, Bray
+
+st.physeq.dna.t0_7.mawi <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '0' | Type == 'Mawi' & Day == '7')
+dist.dna.t0_7.mawi <- phyloseq::distance(physeq = st.physeq.dna.t0_7.mawi, method = 'bray')
+dist.dna.t0_7.mawi.df <- 
+  matrix(dist.dna.t0_7.mawi)
+dist.dna.t0_7.mawi.list <- reshape2::melt(dist.dna.t0_7.mawi.df)[reshape2::melt(upper.tri(dist.dna.t0_7.mawi.df))$value,]
+names(dist.dna.t0_7.mawi.list) <- c("c1", "c2", "distance")
+dist.dna.t0_7.mawi.list <- cbind(dist.dna.t0_7.mawi.list, "comp" = "T0_vs_T07", "type" = "Mawi")
+
+# T0 vs T14, Mawi, DNA, Bray
+
+st.physeq.dna.t0_14.mawi <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '0' | Type == 'Mawi' & Day == '14')
+dist.dna.t0_14.mawi <- phyloseq::distance(physeq = st.physeq.dna.t0_14.mawi, method = 'bray')
+dist.dna.t0_14.mawi.df <- 
+  matrix(dist.dna.t0_14.mawi)
+dist.dna.t0_14.mawi.list <- reshape2::melt(dist.dna.t0_14.mawi.df)[reshape2::melt(upper.tri(dist.dna.t0_14.mawi.df))$value,]
+names(dist.dna.t0_14.mawi.list) <- c("c1", "c2", "distance")
+dist.dna.t0_14.mawi.list <- cbind(dist.dna.t0_14.mawi.list, "comp" = "T0_vs_T14", "type" = "Mawi")
+
+# T0 vs T21, Mawi, DNA, Bray
+
+st.physeq.dna.t0_21.mawi <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '0' | Type == 'Mawi' & Day == '21')
+dist.dna.t0_21.mawi <- phyloseq::distance(physeq = st.physeq.dna.t0_21.mawi, method = 'bray')
+dist.dna.t0_21.mawi.df <- 
+  matrix(dist.dna.t0_21.mawi)
+dist.dna.t0_21.mawi.list <- reshape2::melt(dist.dna.t0_21.mawi.df)[reshape2::melt(upper.tri(dist.dna.t0_21.mawi.df))$value,]
+names(dist.dna.t0_21.mawi.list) <- c("c1", "c2", "distance")
+dist.dna.t0_21.mawi.list <- cbind(dist.dna.t0_21.mawi.list, "comp" = "T0_vs_T21", "type" = "Mawi")
+
+# T0 vs T40, Mawi, DNA, Bray
+
+st.physeq.dna.t0_40.mawi <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '0' | Type == 'Mawi' & Day == '40')
+dist.dna.t0_40.mawi <- phyloseq::distance(physeq = st.physeq.dna.t0_40.mawi, method = 'bray')
+dist.dna.t0_40.mawi.df <- 
+  matrix(dist.dna.t0_40.mawi)
+dist.dna.t0_40.mawi.list <- reshape2::melt(dist.dna.t0_40.mawi.df)[reshape2::melt(upper.tri(dist.dna.t0_40.mawi.df))$value,]
+names(dist.dna.t0_40.mawi.list) <- c("c1", "c2", "distance")
+dist.dna.t0_40.mawi.list <- cbind(dist.dna.t0_40.mawi.list, "comp" = "T0_vs_T40", "type" = "Mawi")
+
+#combine all tables
+dist.per.time_comp.dna.mawi <- rbind(dist.dna.t0_3.mawi.list, dist.dna.t0_7.mawi.list, dist.dna.t0_14.mawi.list, dist.dna.t0_21.mawi.list, dist.dna.t0_40.mawi.list)
+
+#plot
+boxplot.dna.mawi <- ggplot(dist.per.time_comp.dna.mawi, aes(x = comp, y = distance, fill = comp)) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 8,
+               outlier.size = 2) +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") + theme_bw() + theme(axis.title.x=element_blank(), legend.position = "none") +
+  coord_cartesian(ylim = c(0, 0.27)) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5))
+```
+
+Frozen DNA
+
+```{r}
+
+# T0 vs T3, Frozen, DNA, Bray
+
+st.physeq.dna.t0_3.frozen <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '0' | Type == 'Frozen' & Day == '3')
+dist.dna.t0_3.frozen <- phyloseq::distance(physeq = st.physeq.dna.t0_3.frozen, method = 'bray')
+dist.dna.t0_3.frozen.df <- 
+  matrix(dist.dna.t0_3.frozen)
+dist.dna.t0_3.frozen.list <- reshape2::melt(dist.dna.t0_3.frozen.df)[reshape2::melt(upper.tri(dist.dna.t0_3.frozen.df))$value,]
+names(dist.dna.t0_3.frozen.list) <- c("c1", "c2", "distance")
+dist.dna.t0_3.frozen.list <- cbind(dist.dna.t0_3.frozen.list, "comp" = "T0_vs_T03", "type" = "Frozen")
+
+# T0 vs T7, Frozen, DNA, Bray
+
+st.physeq.dna.t0_7.frozen <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '0' | Type == 'Frozen' & Day == '7')
+dist.dna.t0_7.frozen <- phyloseq::distance(physeq = st.physeq.dna.t0_7.frozen, method = 'bray')
+dist.dna.t0_7.frozen.df <- 
+  matrix(dist.dna.t0_7.frozen)
+dist.dna.t0_7.frozen.list <- reshape2::melt(dist.dna.t0_7.frozen.df)[reshape2::melt(upper.tri(dist.dna.t0_7.frozen.df))$value,]
+names(dist.dna.t0_7.frozen.list) <- c("c1", "c2", "distance")
+dist.dna.t0_7.frozen.list <- cbind(dist.dna.t0_7.frozen.list, "comp" = "T0_vs_T07", "type" = "Frozen")
+
+# T0 vs T14, Frozen, DNA, Bray
+
+st.physeq.dna.t0_14.frozen <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '0' | Type == 'Frozen' & Day == '14')
+dist.dna.t0_14.frozen <- phyloseq::distance(physeq = st.physeq.dna.t0_14.frozen, method = 'bray')
+dist.dna.t0_14.frozen.df <- 
+  matrix(dist.dna.t0_14.frozen)
+dist.dna.t0_14.frozen.list <- reshape2::melt(dist.dna.t0_14.frozen.df)[reshape2::melt(upper.tri(dist.dna.t0_14.frozen.df))$value,]
+names(dist.dna.t0_14.frozen.list) <- c("c1", "c2", "distance")
+dist.dna.t0_14.frozen.list <- cbind(dist.dna.t0_14.frozen.list, "comp" = "T0_vs_T14", "type" = "Frozen")
+
+# T0 vs T21, Frozen, DNA, Bray
+
+st.physeq.dna.t0_21.frozen <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '0' | Type == 'Frozen' & Day == '21')
+dist.dna.t0_21.frozen <- phyloseq::distance(physeq = st.physeq.dna.t0_21.frozen, method = 'bray')
+dist.dna.t0_21.frozen.df <- 
+  matrix(dist.dna.t0_21.frozen)
+dist.dna.t0_21.frozen.list <- reshape2::melt(dist.dna.t0_21.frozen.df)[reshape2::melt(upper.tri(dist.dna.t0_21.frozen.df))$value,]
+names(dist.dna.t0_21.frozen.list) <- c("c1", "c2", "distance")
+dist.dna.t0_21.frozen.list <- cbind(dist.dna.t0_21.frozen.list, "comp" = "T0_vs_T21", "type" = "Frozen")
+
+# T0 vs T40, Frozen, DNA, Bray
+
+st.physeq.dna.t0_40.frozen <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '0' | Type == 'Frozen' & Day == '40')
+dist.dna.t0_40.frozen <- phyloseq::distance(physeq = st.physeq.dna.t0_40.frozen, method = 'bray')
+dist.dna.t0_40.frozen.df <- 
+  matrix(dist.dna.t0_40.frozen)
+dist.dna.t0_40.frozen.list <- reshape2::melt(dist.dna.t0_40.frozen.df)[reshape2::melt(upper.tri(dist.dna.t0_40.frozen.df))$value,]
+names(dist.dna.t0_40.frozen.list) <- c("c1", "c2", "distance")
+dist.dna.t0_40.frozen.list <- cbind(dist.dna.t0_40.frozen.list, "comp" = "T0_vs_T40", "type" = "Frozen")
+
+#combine all tables
+dist.per.time_comp.dna.frozen <- rbind(dist.dna.t0_3.frozen.list, dist.dna.t0_7.frozen.list, dist.dna.t0_14.frozen.list, dist.dna.t0_21.frozen.list, dist.dna.t0_40.frozen.list)
+
+#plot
+boxplot.dna.frozen <- ggplot(dist.per.time_comp.dna.frozen, aes(x = comp, y = distance, fill = comp)) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 8,
+               outlier.size = 2) +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") + theme_bw() + theme(axis.title.x=element_blank(), legend.position = "none") +
+  coord_cartesian(ylim = c(0, 0.27)) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5))
+  
+```
+
+```{r}
+dist.per.time_comp.dna <- rbind(dist.per.time_comp.dna.frozen, dist.per.time_comp.dna.mawi)
+
+boxplot.dna.all <- ggplot(dist.per.time_comp.dna, aes(x = comp, y = distance, fill = comp)) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 8,
+               outlier.size = 2) +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") +
+  facet_grid(. ~ type) +
+  theme_bw() +
+  theme(axis.title.x = element_blank(), legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5)) +
+  ggtitle("Distance Across Time Points (Bray-Curtis)") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+boxplot.dna.all
+ggsave("boxplot_across_time_points (bray) .png",
+       width = 6,
+       height = 4,
+       units = "in")
+```
+
+Distance Comparison across time points (Jaccard)
+
+```{r}
+
+# T0 vs T3, Mawi, DNA, Jaccard
+
+st.physeq.dna.t0_3.mawi <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '0' | Type == 'Mawi' & Day == '3')
+dist.dna.t0_3.mawi <- phyloseq::distance(physeq = st.physeq.dna.t0_3.mawi, method = 'jaccard')
+dist.dna.t0_3.mawi.df <- 
+  matrix(dist.dna.t0_3.mawi)
+dist.dna.t0_3.mawi.list <- reshape2::melt(dist.dna.t0_3.mawi.df)[reshape2::melt(upper.tri(dist.dna.t0_3.mawi.df))$value,]
+names(dist.dna.t0_3.mawi.list) <- c("c1", "c2", "distance")
+dist.dna.t0_3.mawi.list <- cbind(dist.dna.t0_3.mawi.list, "comp" = "T0_vs_T03", "type" = "Mawi")
+
+# T0 vs T7, Mawi, DNA, Jaccard
+
+st.physeq.dna.t0_7.mawi <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '0' | Type == 'Mawi' & Day == '7')
+dist.dna.t0_7.mawi <- phyloseq::distance(physeq = st.physeq.dna.t0_7.mawi, method = 'jaccard')
+dist.dna.t0_7.mawi.df <- 
+  matrix(dist.dna.t0_7.mawi)
+dist.dna.t0_7.mawi.list <- reshape2::melt(dist.dna.t0_7.mawi.df)[reshape2::melt(upper.tri(dist.dna.t0_7.mawi.df))$value,]
+names(dist.dna.t0_7.mawi.list) <- c("c1", "c2", "distance")
+dist.dna.t0_7.mawi.list <- cbind(dist.dna.t0_7.mawi.list, "comp" = "T0_vs_T07", "type" = "Mawi")
+
+# T0 vs T14, Mawi, DNA, Jaccard
+
+st.physeq.dna.t0_14.mawi <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '0' | Type == 'Mawi' & Day == '14')
+dist.dna.t0_14.mawi <- phyloseq::distance(physeq = st.physeq.dna.t0_14.mawi, method = 'jaccard')
+dist.dna.t0_14.mawi.df <- 
+  matrix(dist.dna.t0_14.mawi)
+dist.dna.t0_14.mawi.list <- reshape2::melt(dist.dna.t0_14.mawi.df)[reshape2::melt(upper.tri(dist.dna.t0_14.mawi.df))$value,]
+names(dist.dna.t0_14.mawi.list) <- c("c1", "c2", "distance")
+dist.dna.t0_14.mawi.list <- cbind(dist.dna.t0_14.mawi.list, "comp" = "T0_vs_T14", "type" = "Mawi")
+
+# T0 vs T21, Mawi, DNA, Jaccard
+
+st.physeq.dna.t0_21.mawi <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '0' | Type == 'Mawi' & Day == '21')
+dist.dna.t0_21.mawi <- phyloseq::distance(physeq = st.physeq.dna.t0_21.mawi, method = 'jaccard')
+dist.dna.t0_21.mawi.df <- 
+  matrix(dist.dna.t0_21.mawi)
+dist.dna.t0_21.mawi.list <- reshape2::melt(dist.dna.t0_21.mawi.df)[reshape2::melt(upper.tri(dist.dna.t0_21.mawi.df))$value,]
+names(dist.dna.t0_21.mawi.list) <- c("c1", "c2", "distance")
+dist.dna.t0_21.mawi.list <- cbind(dist.dna.t0_21.mawi.list, "comp" = "T0_vs_T21", "type" = "Mawi")
+
+# T0 vs T40, Mawi, DNA, Jaccard
+
+st.physeq.dna.t0_40.mawi <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '0' | Type == 'Mawi' & Day == '40')
+dist.dna.t0_40.mawi <- phyloseq::distance(physeq = st.physeq.dna.t0_40.mawi, method = 'jaccard')
+dist.dna.t0_40.mawi.df <- 
+  matrix(dist.dna.t0_40.mawi)
+dist.dna.t0_40.mawi.list <- reshape2::melt(dist.dna.t0_40.mawi.df)[reshape2::melt(upper.tri(dist.dna.t0_40.mawi.df))$value,]
+names(dist.dna.t0_40.mawi.list) <- c("c1", "c2", "distance")
+dist.dna.t0_40.mawi.list <- cbind(dist.dna.t0_40.mawi.list, "comp" = "T0_vs_T40", "type" = "Mawi")
+
+#combine all tables
+dist.per.time_comp.dna.mawi <- rbind(dist.dna.t0_3.mawi.list, dist.dna.t0_7.mawi.list, dist.dna.t0_14.mawi.list, dist.dna.t0_21.mawi.list, dist.dna.t0_40.mawi.list)
+
+#plot
+boxplot.dna.mawi <- ggplot(dist.per.time_comp.dna.mawi, aes(x = comp, y = distance, fill = comp)) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 8,
+               outlier.size = 2) +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") + theme_bw() + theme(axis.title.x=element_blank(), legend.position = "none") +
+  coord_cartesian(ylim = c(0, 0.27)) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5))
+```
+
+```{r}
+
+# T0 vs T3, Frozen, DNA, Jaccard
+
+st.physeq.dna.t0_3.frozen <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '0' | Type == 'Frozen' & Day == '3')
+dist.dna.t0_3.frozen <- phyloseq::distance(physeq = st.physeq.dna.t0_3.frozen, method = 'jaccard')
+dist.dna.t0_3.frozen.df <- 
+  matrix(dist.dna.t0_3.frozen)
+dist.dna.t0_3.frozen.list <- reshape2::melt(dist.dna.t0_3.frozen.df)[reshape2::melt(upper.tri(dist.dna.t0_3.frozen.df))$value,]
+names(dist.dna.t0_3.frozen.list) <- c("c1", "c2", "distance")
+dist.dna.t0_3.frozen.list <- cbind(dist.dna.t0_3.frozen.list, "comp" = "T0_vs_T03", "type" = "Frozen")
+
+# T0 vs T7, Frozen, DNA, Jaccard
+
+st.physeq.dna.t0_7.frozen <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '0' | Type == 'Frozen' & Day == '7')
+dist.dna.t0_7.frozen <- phyloseq::distance(physeq = st.physeq.dna.t0_7.frozen, method = 'jaccard')
+dist.dna.t0_7.frozen.df <- 
+  matrix(dist.dna.t0_7.frozen)
+dist.dna.t0_7.frozen.list <- reshape2::melt(dist.dna.t0_7.frozen.df)[reshape2::melt(upper.tri(dist.dna.t0_7.frozen.df))$value,]
+names(dist.dna.t0_7.frozen.list) <- c("c1", "c2", "distance")
+dist.dna.t0_7.frozen.list <- cbind(dist.dna.t0_7.frozen.list, "comp" = "T0_vs_T07", "type" = "Frozen")
+
+# T0 vs T14, Frozen, DNA, Jaccard
+
+st.physeq.dna.t0_14.frozen <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '0' | Type == 'Frozen' & Day == '14')
+dist.dna.t0_14.frozen <- phyloseq::distance(physeq = st.physeq.dna.t0_14.frozen, method = 'jaccard')
+dist.dna.t0_14.frozen.df <- 
+  matrix(dist.dna.t0_14.frozen)
+dist.dna.t0_14.frozen.list <- reshape2::melt(dist.dna.t0_14.frozen.df)[reshape2::melt(upper.tri(dist.dna.t0_14.frozen.df))$value,]
+names(dist.dna.t0_14.frozen.list) <- c("c1", "c2", "distance")
+dist.dna.t0_14.frozen.list <- cbind(dist.dna.t0_14.frozen.list, "comp" = "T0_vs_T14", "type" = "Frozen")
+
+# T0 vs T21, Frozen, DNA, Jaccard
+
+st.physeq.dna.t0_21.frozen <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '0' | Type == 'Frozen' & Day == '21')
+dist.dna.t0_21.frozen <- phyloseq::distance(physeq = st.physeq.dna.t0_21.frozen, method = 'jaccard')
+dist.dna.t0_21.frozen.df <- 
+  matrix(dist.dna.t0_21.frozen)
+dist.dna.t0_21.frozen.list <- reshape2::melt(dist.dna.t0_21.frozen.df)[reshape2::melt(upper.tri(dist.dna.t0_21.frozen.df))$value,]
+names(dist.dna.t0_21.frozen.list) <- c("c1", "c2", "distance")
+dist.dna.t0_21.frozen.list <- cbind(dist.dna.t0_21.frozen.list, "comp" = "T0_vs_T21", "type" = "Frozen")
+
+# T0 vs T40, Frozen, DNA, Jaccard
+
+st.physeq.dna.t0_40.frozen <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '0' | Type == 'Frozen' & Day == '40')
+dist.dna.t0_40.frozen <- phyloseq::distance(physeq = st.physeq.dna.t0_40.frozen, method = 'jaccard')
+dist.dna.t0_40.frozen.df <- 
+  matrix(dist.dna.t0_40.frozen)
+dist.dna.t0_40.frozen.list <- reshape2::melt(dist.dna.t0_40.frozen.df)[reshape2::melt(upper.tri(dist.dna.t0_40.frozen.df))$value,]
+names(dist.dna.t0_40.frozen.list) <- c("c1", "c2", "distance")
+dist.dna.t0_40.frozen.list <- cbind(dist.dna.t0_40.frozen.list, "comp" = "T0_vs_T40", "type" = "Frozen")
+
+#combine all tables
+dist.per.time_comp.dna.frozen <- rbind(dist.dna.t0_3.frozen.list, dist.dna.t0_7.frozen.list, dist.dna.t0_14.frozen.list, dist.dna.t0_21.frozen.list, dist.dna.t0_40.frozen.list)
+
+#plot
+boxplot.dna.frozen <- ggplot(dist.per.time_comp.dna.frozen, aes(x = comp, y = distance, fill = comp)) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 8,
+               outlier.size = 2) +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") + theme_bw() + theme(axis.title.x=element_blank(), legend.position = "none") +
+  coord_cartesian(ylim = c(0, 0.27)) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5))
+  
+```
+
+```{r}
+dist.per.time_comp.dna <- rbind(dist.per.time_comp.dna.frozen, dist.per.time_comp.dna.mawi)
+
+boxplot.dna.all <- ggplot(dist.per.time_comp.dna, aes(x = comp, y = distance, fill = comp, )) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 8,
+               outlier.size = 2) +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") +
+  facet_grid(. ~ type) +
+  theme_bw() +
+  theme(axis.title.x = element_blank(), legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5)) +
+  ggtitle("Distance Across Time Points (Jaccard)") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+boxplot.dna.all
+ggsave("boxplot_across_time_points (jaccard) .png",
+       width = 6,
+       height = 4,
+       units = "in")
+```
+
+Mawi RNA
+
+```{r}
+
+# T0 vs T3, Mawi, RNA
+
+st.physeq.rna.t0_3.mawi <- subset_samples(st.physeq.rna.r, Type == 'Mawi' & Day == '0' | Type == 'Mawi' & Day == '3')
+dist.rna.t0_3.mawi <- phyloseq::distance(physeq = st.physeq.rna.t0_3.mawi, method = 'bray')
+dist.rna.t0_3.mawi.df <- 
+  matrix(dist.rna.t0_3.mawi)
+dist.rna.t0_3.mawi.list <- reshape2::melt(dist.rna.t0_3.mawi.df)[reshape2::melt(upper.tri(dist.rna.t0_3.mawi.df))$value,]
+names(dist.rna.t0_3.mawi.list) <- c("c1", "c2", "distance")
+dist.rna.t0_3.mawi.list <- cbind(dist.rna.t0_3.mawi.list, "comp" = "T0_vs_T03")
+
+# T0 vs T7, Mawi, RNA
+
+st.physeq.rna.t0_7.mawi <- subset_samples(st.physeq.rna.r, Type == 'Mawi' & Day == '0' | Type == 'Mawi' & Day == '7')
+dist.rna.t0_7.mawi <- phyloseq::distance(physeq = st.physeq.rna.t0_7.mawi, method = 'bray')
+dist.rna.t0_7.mawi.df <- 
+  matrix(dist.rna.t0_7.mawi)
+dist.rna.t0_7.mawi.list <- reshape2::melt(dist.rna.t0_7.mawi.df)[reshape2::melt(upper.tri(dist.rna.t0_7.mawi.df))$value,]
+names(dist.rna.t0_7.mawi.list) <- c("c1", "c2", "distance")
+dist.rna.t0_7.mawi.list <- cbind(dist.rna.t0_7.mawi.list, "comp" = "T0_vs_T07")
+
+# T0 vs T14, Mawi, RNA
+
+st.physeq.rna.t0_14.mawi <- subset_samples(st.physeq.rna.r, Type == 'Mawi' & Day == '0' | Type == 'Mawi' & Day == '14')
+dist.rna.t0_14.mawi <- phyloseq::distance(physeq = st.physeq.rna.t0_14.mawi, method = 'bray')
+dist.rna.t0_14.mawi.df <- 
+  matrix(dist.rna.t0_14.mawi)
+dist.rna.t0_14.mawi.list <- reshape2::melt(dist.rna.t0_14.mawi.df)[reshape2::melt(upper.tri(dist.rna.t0_14.mawi.df))$value,]
+names(dist.rna.t0_14.mawi.list) <- c("c1", "c2", "distance")
+dist.rna.t0_14.mawi.list <- cbind(dist.rna.t0_14.mawi.list, "comp" = "T0_vs_T14")
+
+# T0 vs T21, Mawi, RNA
+
+st.physeq.rna.t0_21.mawi <- subset_samples(st.physeq.rna.r, Type == 'Mawi' & Day == '0' | Type == 'Mawi' & Day == '21')
+dist.rna.t0_21.mawi <- phyloseq::distance(physeq = st.physeq.rna.t0_21.mawi, method = 'bray')
+dist.rna.t0_21.mawi.df <- 
+  matrix(dist.rna.t0_21.mawi)
+dist.rna.t0_21.mawi.list <- reshape2::melt(dist.rna.t0_21.mawi.df)[reshape2::melt(upper.tri(dist.rna.t0_21.mawi.df))$value,]
+names(dist.rna.t0_21.mawi.list) <- c("c1", "c2", "distance")
+dist.rna.t0_21.mawi.list <- cbind(dist.rna.t0_21.mawi.list, "comp" = "T0_vs_T21")
+
+#combine all tables
+dist.per.time_comp.rna.mawi <- rbind(dist.rna.t0_3.mawi.list, dist.rna.t0_7.mawi.list, dist.rna.t0_14.mawi.list, dist.rna.t0_21.mawi.list)
+
+#plot
+boxplot.rna.mawi <- ggplot(dist.per.time_comp.rna.mawi, aes(x = comp, y = distance, fill = comp)) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 8,
+               outlier.size = 2) +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") + theme_bw() + theme(axis.title.x=element_blank(), legend.position = "none") +
+  coord_cartesian(ylim = c(0, 1.02)) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5))
+```
+
+```{r}
+
+# T0 vs T3, Frozen, RNA
+
+st.physeq.rna.t0_3.frozen <- subset_samples(st.physeq.rna.r, Type == 'Frozen' & Day == '0' | Type == 'Frozen' & Day == '3')
+dist.rna.t0_3.frozen <- phyloseq::distance(physeq = st.physeq.rna.t0_3.frozen, method = 'bray')
+dist.rna.t0_3.frozen.df <- 
+  matrix(dist.rna.t0_3.frozen)
+dist.rna.t0_3.frozen.list <- reshape2::melt(dist.rna.t0_3.frozen.df)[reshape2::melt(upper.tri(dist.rna.t0_3.frozen.df))$value,]
+names(dist.rna.t0_3.frozen.list) <- c("c1", "c2", "distance")
+dist.rna.t0_3.frozen.list <- cbind(dist.rna.t0_3.frozen.list, "comp" = "T0_vs_T03", "type" = "Frozen")
+
+# T0 vs T7, Frozen, RNA
+
+st.physeq.rna.t0_7.frozen <- subset_samples(st.physeq.rna.r, Type == 'Frozen' & Day == '0' | Type == 'Frozen' & Day == '7')
+dist.rna.t0_7.frozen <- phyloseq::distance(physeq = st.physeq.rna.t0_7.frozen, method = 'bray')
+dist.rna.t0_7.frozen.df <- 
+  matrix(dist.rna.t0_7.mawi)
+dist.rna.t0_7.frozen.list <- reshape2::melt(dist.rna.t0_7.frozen.df)[reshape2::melt(upper.tri(dist.rna.t0_7.frozen.df))$value,]
+names(dist.rna.t0_7.frozen.list) <- c("c1", "c2", "distance")
+dist.rna.t0_7.frozen.list <- cbind(dist.rna.t0_7.frozen.list, "comp" = "T0_vs_T07", "type" = "Frozen")
+
+# T0 vs T14, Frozen, RNA
+
+st.physeq.rna.t0_14.frozen <- subset_samples(st.physeq.rna.r, Type == 'Frozen' & Day == '0' | Type == 'Frozen' & Day == '14')
+dist.rna.t0_14.frozen <- phyloseq::distance(physeq = st.physeq.rna.t0_14.frozen, method = 'bray')
+dist.rna.t0_14.frozen.df <- 
+  matrix(dist.rna.t0_14.frozen)
+dist.rna.t0_14.frozen.list <- reshape2::melt(dist.rna.t0_14.frozen.df)[reshape2::melt(upper.tri(dist.rna.t0_14.frozen.df))$value,]
+names(dist.rna.t0_14.frozen.list) <- c("c1", "c2", "distance")
+dist.rna.t0_14.frozen.list <- cbind(dist.rna.t0_14.frozen.list, "comp" = "T0_vs_T14", "type" = "Frozen")
+
+# T0 vs T21, Frozen, RNA
+
+st.physeq.rna.t0_21.frozen <- subset_samples(st.physeq.rna.r, Type == 'Frozen' & Day == '0' | Type == 'Frozen' & Day == '21')
+dist.rna.t0_21.frozen <- phyloseq::distance(physeq = st.physeq.rna.t0_21.frozen, method = 'bray')
+dist.rna.t0_21.frozen.df <- 
+  matrix(dist.rna.t0_21.frozen)
+dist.rna.t0_21.frozen.list <- reshape2::melt(dist.rna.t0_21.frozen.df)[reshape2::melt(upper.tri(dist.rna.t0_21.frozen.df))$value,]
+names(dist.rna.t0_21.frozen.list) <- c("c1", "c2", "distance")
+dist.rna.t0_21.frozen.list <- cbind(dist.rna.t0_21.frozen.list, "comp" = "T0_vs_T21", "type" = "Frozen")
+
+#combine all tables
+dist.per.time_comp.rna.frozen <- rbind(dist.rna.t0_3.frozen.list, dist.rna.t0_7.frozen.list, dist.rna.t0_14.frozen.list, dist.rna.t0_21.frozen.list)
+
+#plot
+boxplot.rna.frozen <- ggplot(dist.per.time_comp.rna.frozen, aes(x = comp, y = distance, fill = comp)) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 8,
+               outlier.size = 2) +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") + theme_bw() + theme(axis.title.x=element_blank(), legend.position = "none") +
+  coord_cartesian(ylim = c(0, 1.02)) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5))
+```
+
+RNA comparison boxplots
+
+```{r}
+plot_grid(boxplot.rna.mawi, boxplot.rna.frozen, labels = c("Mawi", "Frozen"), label_size = 8)
+```
+
+Replicate Comparison (Bray-Curtis)
+
+```{r}
+
+# T0, Mawi, DNA, Bray
+
+st.physeq.dna.t0.mawi_reps <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '0')
+dist.dna.t0.mawi_reps <- phyloseq::distance(physeq = st.physeq.dna.t0.mawi_reps, method = 'bray')
+dist.dna.t0.mawi_reps.df <- 
+  matrix(dist.dna.t0.mawi_reps)
+dist.dna.t0.mawi_reps.list <- reshape2::melt(dist.dna.t0.mawi_reps.df)[reshape2::melt(upper.tri(dist.dna.t0.mawi_reps.df))$value,]
+names(dist.dna.t0.mawi_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t0.mawi_reps.list <- cbind(dist.dna.t0.mawi_reps.list, "comp" = "T0", "type" = "Mawi")
+
+# T3, Mawi, DNA, Bray
+
+st.physeq.dna.t3.mawi_reps <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '3')
+dist.dna.t3.mawi_reps <- phyloseq::distance(physeq = st.physeq.dna.t3.mawi_reps, method = 'bray')
+dist.dna.t3.mawi_reps.df <- 
+  matrix(dist.dna.t3.mawi_reps)
+dist.dna.t3.mawi_reps.list <- reshape2::melt(dist.dna.t3.mawi_reps.df)[reshape2::melt(upper.tri(dist.dna.t3.mawi_reps.df))$value,]
+names(dist.dna.t3.mawi_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t3.mawi_reps.list <- cbind(dist.dna.t3.mawi_reps.list, "comp" = "T03", "type" = "Mawi")
+
+# T7, Mawi, DNA, Bray
+
+st.physeq.dna.t7.mawi_reps <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '7')
+dist.dna.t7.mawi_reps <- phyloseq::distance(physeq = st.physeq.dna.t7.mawi_reps, method = 'bray')
+dist.dna.t7.mawi_reps.df <- 
+  matrix(dist.dna.t7.mawi_reps)
+dist.dna.t7.mawi_reps.list <- reshape2::melt(dist.dna.t7.mawi_reps.df)[reshape2::melt(upper.tri(dist.dna.t7.mawi_reps.df))$value,]
+names(dist.dna.t7.mawi_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t7.mawi_reps.list <- cbind(dist.dna.t7.mawi_reps.list, "comp" = "T07", "type" = "Mawi")
+
+# T14, Mawi, DNA, Bray
+
+st.physeq.dna.t14.mawi_reps <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '14')
+dist.dna.t14.mawi_reps <- phyloseq::distance(physeq = st.physeq.dna.t14.mawi_reps, method = 'bray')
+dist.dna.t14.mawi_reps.df <- 
+  matrix(dist.dna.t14.mawi_reps)
+dist.dna.t14.mawi_reps.list <- reshape2::melt(dist.dna.t14.mawi_reps.df)[reshape2::melt(upper.tri(dist.dna.t14.mawi_reps.df))$value,]
+names(dist.dna.t14.mawi_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t14.mawi_reps.list <- cbind(dist.dna.t14.mawi_reps.list, "comp" = "T14", "type" = "Mawi")
+
+# T21, Mawi, DNA, Bray
+
+st.physeq.dna.t21.mawi_reps <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '21')
+dist.dna.t21.mawi_reps <- phyloseq::distance(physeq = st.physeq.dna.t21.mawi_reps, method = 'bray')
+dist.dna.t21.mawi_reps.df <- 
+  matrix(dist.dna.t21.mawi_reps)
+dist.dna.t21.mawi_reps.list <- reshape2::melt(dist.dna.t21.mawi_reps.df)[reshape2::melt(upper.tri(dist.dna.t21.mawi_reps.df))$value,]
+names(dist.dna.t21.mawi_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t21.mawi_reps.list <- cbind(dist.dna.t21.mawi_reps.list, "comp" = "T21", "type" = "Mawi")
+
+# T40, Mawi, DNA, Bray
+
+st.physeq.dna.t40.mawi_reps <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '40')
+dist.dna.t40.mawi_reps <- phyloseq::distance(physeq = st.physeq.dna.t40.mawi_reps, method = 'bray')
+dist.dna.t40.mawi_reps.df <- 
+  matrix(dist.dna.t40.mawi_reps)
+dist.dna.t40.mawi_reps.list <- reshape2::melt(dist.dna.t40.mawi_reps.df)[reshape2::melt(upper.tri(dist.dna.t40.mawi_reps.df))$value,]
+names(dist.dna.t40.mawi_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t40.mawi_reps.list <- cbind(dist.dna.t40.mawi_reps.list, "comp" = "T40", "type" = "Mawi")
+
+#combine all tables
+dist.per.time_comp.dna.mawi_reps <- rbind(dist.dna.t0.mawi_reps.list, dist.dna.t3.mawi_reps.list, dist.dna.t7.mawi_reps.list, dist.dna.t14.mawi_reps.list, dist.dna.t21.mawi_reps.list, dist.dna.t40.mawi_reps.list)
+
+#plot
+boxplot.mawi_reps.dna <- ggplot(dist.per.time_comp.dna.mawi_reps, aes(x = comp, y = distance, fill = comp)) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 8,
+               outlier.size = 2) +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") + theme_bw() + theme(axis.title.x=element_blank(), legend.position = "none") +
+  coord_cartesian(ylim = c(0, 0.25))
+```
+
+```{r}
+
+# T0, Frozen, DNA, Bray
+
+st.physeq.dna.t0.frozen_reps <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '0')
+dist.dna.t0.frozen_reps <- phyloseq::distance(physeq = st.physeq.dna.t0.frozen_reps, method = 'bray')
+dist.dna.t0.frozen_reps.df <- 
+  matrix(dist.dna.t0.frozen_reps)
+dist.dna.t0.frozen_reps.list <- reshape2::melt(dist.dna.t0.frozen_reps.df)[reshape2::melt(upper.tri(dist.dna.t0.frozen_reps.df))$value,]
+names(dist.dna.t0.frozen_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t0.frozen_reps.list <- cbind(dist.dna.t0.frozen_reps.list, "comp" = "T0", "type" = "Frozen")
+
+# T3, Frozen, DNA, Bray
+
+st.physeq.dna.t3.frozen_reps <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '3')
+dist.dna.t3.frozen_reps <- phyloseq::distance(physeq = st.physeq.dna.t3.frozen_reps, method = 'bray')
+dist.dna.t3.frozen_reps.df <- 
+  matrix(dist.dna.t3.frozen_reps)
+dist.dna.t3.frozen_reps.list <- reshape2::melt(dist.dna.t3.frozen_reps.df)[reshape2::melt(upper.tri(dist.dna.t3.frozen_reps.df))$value,]
+names(dist.dna.t3.frozen_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t3.frozen_reps.list <- cbind(dist.dna.t3.frozen_reps.list, "comp" = "T03", "type" = "Frozen")
+
+# T7, Frozen, DNA, Bray
+
+st.physeq.dna.t7.frozen_reps <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '7')
+dist.dna.t7.frozen_reps <- phyloseq::distance(physeq = st.physeq.dna.t7.frozen_reps, method = 'bray')
+dist.dna.t7.frozen_reps.df <- 
+  matrix(dist.dna.t7.frozen_reps)
+dist.dna.t7.frozen_reps.list <- reshape2::melt(dist.dna.t7.frozen_reps.df)[reshape2::melt(upper.tri(dist.dna.t7.frozen_reps.df))$value,]
+names(dist.dna.t7.frozen_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t7.frozen_reps.list <- cbind(dist.dna.t7.frozen_reps.list, "comp" = "T07", "type" = "Frozen")
+
+# T14, Frozen, DNA, Bray
+
+st.physeq.dna.t14.frozen_reps <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '14')
+dist.dna.t14.frozen_reps <- phyloseq::distance(physeq = st.physeq.dna.t14.frozen_reps, method = 'bray')
+dist.dna.t14.frozen_reps.df <- 
+  matrix(dist.dna.t14.frozen_reps)
+dist.dna.t14.frozen_reps.list <- reshape2::melt(dist.dna.t14.frozen_reps.df)[reshape2::melt(upper.tri(dist.dna.t14.frozen_reps.df))$value,]
+names(dist.dna.t14.frozen_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t14.frozen_reps.list <- cbind(dist.dna.t14.frozen_reps.list, "comp" = "T14", "type" = "Frozen")
+
+# T21, Frozen, DNA, Bray
+
+st.physeq.dna.t21.frozen_reps <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '21')
+dist.dna.t21.frozen_reps <- phyloseq::distance(physeq = st.physeq.dna.t21.frozen_reps, method = 'bray')
+dist.dna.t21.frozen_reps.df <- 
+  matrix(dist.dna.t21.frozen_reps)
+dist.dna.t21.frozen_reps.list <- reshape2::melt(dist.dna.t21.frozen_reps.df)[reshape2::melt(upper.tri(dist.dna.t21.frozen_reps.df))$value,]
+names(dist.dna.t21.frozen_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t21.frozen_reps.list <- cbind(dist.dna.t21.frozen_reps.list, "comp" = "T21", "type" = "Frozen")
+
+# T40, Frozen, DNA, Bray
+
+st.physeq.dna.t40.frozen_reps <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '40')
+dist.dna.t40.frozen_reps <- phyloseq::distance(physeq = st.physeq.dna.t40.frozen_reps, method = 'bray')
+dist.dna.t40.frozen_reps.df <- 
+  matrix(dist.dna.t40.frozen_reps)
+dist.dna.t40.frozen_reps.list <- reshape2::melt(dist.dna.t40.frozen_reps.df)[reshape2::melt(upper.tri(dist.dna.t40.frozen_reps.df))$value,]
+names(dist.dna.t40.frozen_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t40.frozen_reps.list <- cbind(dist.dna.t40.frozen_reps.list, "comp" = "T40", "type" = "Frozen")
+
+#combine all tables
+dist.per.time_comp.dna.frozen_reps <- rbind(dist.dna.t0.frozen_reps.list, dist.dna.t3.frozen_reps.list, dist.dna.t7.frozen_reps.list, dist.dna.t14.frozen_reps.list, dist.dna.t21.frozen_reps.list, dist.dna.t40.frozen_reps.list)
+
+#plot
+boxplot.frozen_reps.dna <- ggplot(dist.per.time_comp.dna.frozen_reps, aes(x = comp, y = distance, fill = comp)) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 8,
+               outlier.size = 2) +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") + theme_bw() + theme(axis.title.x=element_blank(), legend.position = "none") +
+  coord_cartesian(ylim = c(0, 0.25))
+```
+
+```{r}
+dist.per.reps.dna <- rbind(dist.per.time_comp.dna.frozen_reps, dist.per.time_comp.dna.mawi_reps)
+
+boxplot.reps.dna <- ggplot(dist.per.reps.dna, aes(x = comp, y = distance, fill = comp, )) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 8,
+               outlier.size = 2) +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") +
+  facet_grid(. ~ type) +
+  theme_bw() +
+  theme(axis.title.x = element_blank(), legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5)) +
+  ggtitle("Distance Comparison By Replicate (Bray-Curtis)") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+boxplot.reps.dna
+ggsave("boxplot_reps (bray) .png",
+       width = 6,
+       height = 4,
+       units = "in")
+```
+Replicate Comparison (Jaccard)
+
+```{r}
+
+# T0, Mawi, DNA, Jaccard
+
+st.physeq.dna.t0.mawi_reps <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '0')
+dist.dna.t0.mawi_reps <- phyloseq::distance(physeq = st.physeq.dna.t0.mawi_reps, method = 'jaccard')
+dist.dna.t0.mawi_reps.df <- 
+  matrix(dist.dna.t0.mawi_reps)
+dist.dna.t0.mawi_reps.list <- reshape2::melt(dist.dna.t0.mawi_reps.df)[reshape2::melt(upper.tri(dist.dna.t0.mawi_reps.df))$value,]
+names(dist.dna.t0.mawi_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t0.mawi_reps.list <- cbind(dist.dna.t0.mawi_reps.list, "comp" = "T0", "type" = "Mawi")
+
+# T3, Mawi, DNA, Jaccard
+
+st.physeq.dna.t3.mawi_reps <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '3')
+dist.dna.t3.mawi_reps <- phyloseq::distance(physeq = st.physeq.dna.t3.mawi_reps, method = 'jaccard')
+dist.dna.t3.mawi_reps.df <- 
+  matrix(dist.dna.t3.mawi_reps)
+dist.dna.t3.mawi_reps.list <- reshape2::melt(dist.dna.t3.mawi_reps.df)[reshape2::melt(upper.tri(dist.dna.t3.mawi_reps.df))$value,]
+names(dist.dna.t3.mawi_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t3.mawi_reps.list <- cbind(dist.dna.t3.mawi_reps.list, "comp" = "T03", "type" = "Mawi")
+
+# T7, Mawi, DNA, Jaccard
+
+st.physeq.dna.t7.mawi_reps <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '7')
+dist.dna.t7.mawi_reps <- phyloseq::distance(physeq = st.physeq.dna.t7.mawi_reps, method = 'jaccard')
+dist.dna.t7.mawi_reps.df <- 
+  matrix(dist.dna.t7.mawi_reps)
+dist.dna.t7.mawi_reps.list <- reshape2::melt(dist.dna.t7.mawi_reps.df)[reshape2::melt(upper.tri(dist.dna.t7.mawi_reps.df))$value,]
+names(dist.dna.t7.mawi_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t7.mawi_reps.list <- cbind(dist.dna.t7.mawi_reps.list, "comp" = "T07", "type" = "Mawi")
+
+# T14, Mawi, DNA, Jaccard
+
+st.physeq.dna.t14.mawi_reps <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '14')
+dist.dna.t14.mawi_reps <- phyloseq::distance(physeq = st.physeq.dna.t14.mawi_reps, method = 'jaccard')
+dist.dna.t14.mawi_reps.df <- 
+  matrix(dist.dna.t14.mawi_reps)
+dist.dna.t14.mawi_reps.list <- reshape2::melt(dist.dna.t14.mawi_reps.df)[reshape2::melt(upper.tri(dist.dna.t14.mawi_reps.df))$value,]
+names(dist.dna.t14.mawi_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t14.mawi_reps.list <- cbind(dist.dna.t14.mawi_reps.list, "comp" = "T14", "type" = "Mawi")
+
+# T21, Mawi, DNA, Jaccard
+
+st.physeq.dna.t21.mawi_reps <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '21')
+dist.dna.t21.mawi_reps <- phyloseq::distance(physeq = st.physeq.dna.t21.mawi_reps, method = 'jaccard')
+dist.dna.t21.mawi_reps.df <- 
+  matrix(dist.dna.t21.mawi_reps)
+dist.dna.t21.mawi_reps.list <- reshape2::melt(dist.dna.t21.mawi_reps.df)[reshape2::melt(upper.tri(dist.dna.t21.mawi_reps.df))$value,]
+names(dist.dna.t21.mawi_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t21.mawi_reps.list <- cbind(dist.dna.t21.mawi_reps.list, "comp" = "T21", "type" = "Mawi")
+
+# T40, Mawi, DNA, Jaccard
+
+st.physeq.dna.t40.mawi_reps <- subset_samples(st.physeq.dna.r, Type == 'Mawi' & Day == '40')
+dist.dna.t40.mawi_reps <- phyloseq::distance(physeq = st.physeq.dna.t40.mawi_reps, method = 'jaccard')
+dist.dna.t40.mawi_reps.df <- 
+  matrix(dist.dna.t40.mawi_reps)
+dist.dna.t40.mawi_reps.list <- reshape2::melt(dist.dna.t40.mawi_reps.df)[reshape2::melt(upper.tri(dist.dna.t40.mawi_reps.df))$value,]
+names(dist.dna.t40.mawi_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t40.mawi_reps.list <- cbind(dist.dna.t40.mawi_reps.list, "comp" = "T40", "type" = "Mawi")
+
+#combine all tables
+dist.per.time_comp.dna.mawi_reps <- rbind(dist.dna.t0.mawi_reps.list, dist.dna.t3.mawi_reps.list, dist.dna.t7.mawi_reps.list, dist.dna.t14.mawi_reps.list, dist.dna.t21.mawi_reps.list, dist.dna.t40.mawi_reps.list)
+
+#plot
+boxplot.mawi_reps.dna <- ggplot(dist.per.time_comp.dna.mawi_reps, aes(x = comp, y = distance, fill = comp)) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 8,
+               outlier.size = 2) +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") + theme_bw() + theme(axis.title.x=element_blank(), legend.position = "none") +
+  coord_cartesian(ylim = c(0, 0.25))
+```
+
+```{r}
+
+# T0, Frozen, DNA, Jaccard
+
+st.physeq.dna.t0.frozen_reps <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '0')
+dist.dna.t0.frozen_reps <- phyloseq::distance(physeq = st.physeq.dna.t0.frozen_reps, method = 'jaccard')
+dist.dna.t0.frozen_reps.df <- 
+  matrix(dist.dna.t0.frozen_reps)
+dist.dna.t0.frozen_reps.list <- reshape2::melt(dist.dna.t0.frozen_reps.df)[reshape2::melt(upper.tri(dist.dna.t0.frozen_reps.df))$value,]
+names(dist.dna.t0.frozen_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t0.frozen_reps.list <- cbind(dist.dna.t0.frozen_reps.list, "comp" = "T0", "type" = "Frozen")
+
+# T3, Frozen, DNA, Jaccard
+
+st.physeq.dna.t3.frozen_reps <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '3')
+dist.dna.t3.frozen_reps <- phyloseq::distance(physeq = st.physeq.dna.t3.frozen_reps, method = 'jaccard')
+dist.dna.t3.frozen_reps.df <- 
+  matrix(dist.dna.t3.frozen_reps)
+dist.dna.t3.frozen_reps.list <- reshape2::melt(dist.dna.t3.frozen_reps.df)[reshape2::melt(upper.tri(dist.dna.t3.frozen_reps.df))$value,]
+names(dist.dna.t3.frozen_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t3.frozen_reps.list <- cbind(dist.dna.t3.frozen_reps.list, "comp" = "T03", "type" = "Frozen")
+
+# T7, Frozen, DNA, Jaccard
+
+st.physeq.dna.t7.frozen_reps <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '7')
+dist.dna.t7.frozen_reps <- phyloseq::distance(physeq = st.physeq.dna.t7.frozen_reps, method = 'jaccard')
+dist.dna.t7.frozen_reps.df <- 
+  matrix(dist.dna.t7.frozen_reps)
+dist.dna.t7.frozen_reps.list <- reshape2::melt(dist.dna.t7.frozen_reps.df)[reshape2::melt(upper.tri(dist.dna.t7.frozen_reps.df))$value,]
+names(dist.dna.t7.frozen_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t7.frozen_reps.list <- cbind(dist.dna.t7.frozen_reps.list, "comp" = "T07", "type" = "Frozen")
+
+# T14, Frozen, DNA, Jaccard
+
+st.physeq.dna.t14.frozen_reps <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '14')
+dist.dna.t14.frozen_reps <- phyloseq::distance(physeq = st.physeq.dna.t14.frozen_reps, method = 'jaccard')
+dist.dna.t14.frozen_reps.df <- 
+  matrix(dist.dna.t14.frozen_reps)
+dist.dna.t14.frozen_reps.list <- reshape2::melt(dist.dna.t14.frozen_reps.df)[reshape2::melt(upper.tri(dist.dna.t14.frozen_reps.df))$value,]
+names(dist.dna.t14.frozen_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t14.frozen_reps.list <- cbind(dist.dna.t14.frozen_reps.list, "comp" = "T14", "type" = "Frozen")
+
+# T21, Frozen, DNA, Jaccard
+
+st.physeq.dna.t21.frozen_reps <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '21')
+dist.dna.t21.frozen_reps <- phyloseq::distance(physeq = st.physeq.dna.t21.frozen_reps, method = 'jaccard')
+dist.dna.t21.frozen_reps.df <- 
+  matrix(dist.dna.t21.frozen_reps)
+dist.dna.t21.frozen_reps.list <- reshape2::melt(dist.dna.t21.frozen_reps.df)[reshape2::melt(upper.tri(dist.dna.t21.frozen_reps.df))$value,]
+names(dist.dna.t21.frozen_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t21.frozen_reps.list <- cbind(dist.dna.t21.frozen_reps.list, "comp" = "T21", "type" = "Frozen")
+
+# T40, Frozen, DNA, Jaccard
+
+st.physeq.dna.t40.frozen_reps <- subset_samples(st.physeq.dna.r, Type == 'Frozen' & Day == '40')
+dist.dna.t40.frozen_reps <- phyloseq::distance(physeq = st.physeq.dna.t40.frozen_reps, method = 'jaccard')
+dist.dna.t40.frozen_reps.df <- 
+  matrix(dist.dna.t40.frozen_reps)
+dist.dna.t40.frozen_reps.list <- reshape2::melt(dist.dna.t40.frozen_reps.df)[reshape2::melt(upper.tri(dist.dna.t40.frozen_reps.df))$value,]
+names(dist.dna.t40.frozen_reps.list) <- c("c1", "c2", "distance")
+dist.dna.t40.frozen_reps.list <- cbind(dist.dna.t40.frozen_reps.list, "comp" = "T40", "type" = "Frozen")
+
+#combine all tables
+dist.per.time_comp.dna.frozen_reps <- rbind(dist.dna.t0.frozen_reps.list, dist.dna.t3.frozen_reps.list, dist.dna.t7.frozen_reps.list, dist.dna.t14.frozen_reps.list, dist.dna.t21.frozen_reps.list, dist.dna.t40.frozen_reps.list)
+
+#plot
+boxplot.frozen_reps.dna <- ggplot(dist.per.time_comp.dna.frozen_reps, aes(x = comp, y = distance, fill = comp)) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 8,
+               outlier.size = 2) +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") + theme_bw() + theme(axis.title.x=element_blank(), legend.position = "none") +
+  coord_cartesian(ylim = c(0, 0.25))
+```
+
+```{r}
+dist.per.reps.dna <- rbind(dist.per.time_comp.dna.frozen_reps, dist.per.time_comp.dna.mawi_reps)
+
+boxplot.reps.dna <- ggplot(dist.per.reps.dna, aes(x = comp, y = distance, fill = comp, )) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 8,
+               outlier.size = 2) +
+  scale_fill_viridis(discrete = TRUE, option = "plasma") +
+  facet_grid(. ~ type) +
+  theme_bw() +
+  theme(axis.title.x = element_blank(), legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.5)) +
+  ggtitle("Distance Comparison By Replicate (Jaccard)") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+boxplot.reps.dna
+ggsave("boxplot_reps (jaccard) .png",
+       width = 6,
+       height = 4,
+       units = "in")
+```
+
+```{r}
+
+st.physeq.dna.r.mawi <- subset_samples(st.physeq.dna.r, Type == "Mawi")
+dna.mawi.merged <- merge_samples(st.physeq.dna.r.mawi, "Day")
+dna.mawi.merged.pool <- merge_samples(st.physeq.dna.r.mawi, "Type")
+
+#sample_data(dna.mawi.merged)$Day <- levels(sample_data(st.physeq.dna.r.mawi)$Day)
+
+dna.mawi.merged <- transform_sample_counts(dna.mawi.merged, function(x) 100 * x/sum(x))
+dna.mawi.merged.taxphylum <- tax_glom(dna.mawi.merged, "Phylum")
+phylum10 <- names(sort(taxa_sums(dna.mawi.merged.taxphylum), TRUE)[1:10])
+dna.mawi.phylum10 <- prune_taxa(phylum10, dna.mawi.merged.taxphylum)
+
+title <- "Relative Abundance of Bacterial Communities in Mawi Stool Samples"
+sample_data(dna.mawi.phylum10)$Day <- factor(sample_data(dna.mawi.phylum10)$Day, levels = c("0", "3", "7", "14", "21", "40"))
+
+bp.mawi <- plot_bar(dna.mawi.phylum10, "Day", fill = "Phylum", title=title) +
+  scale_fill_manual(breaks = c("Actinobacteria", "Aquificae", "Bacteria_u_p", "Bacteroidetes", "Chloroflexi", "Euryarchaeota", "Firmicutes", "Gemmatimonadetes", "Proteobacteria", "Verrucomicrobia"),
+                    values = c("coral2", "cyan", "mediumpurple", "goldenrod", "darkseagreen", "darkorange", "royalblue2", "plum4", "tan3", "olivedrab3"))
+                    
+```
+
+```{r}
+test_subset <- subset_samples(st.physeq.dna, Type == "Mawi")
+test_dna <- merge_samples(test_subset, "Day")
+
+test_phylum <- tax_glom(test_dna, "Phylum")
+phylum20 <- names(sort(taxa_sums(test_phylum), TRUE)[1:20])
+test_phylum20 <- prune_taxa(phylum20, test_phylum)
+```
+
+```{r}
+
+st.physeq.dna.r.frozen <- subset_samples(st.physeq.dna.r, Type == "Frozen")
+dna.frozen.merged <- merge_samples(st.physeq.dna.r.frozen, "Day")
+
+#sample_data(dna.mawi.merged)$Day <- levels(sample_data(st.physeq.dna.r.mawi)$Day)
+
+dna.frozen.merged <- transform_sample_counts(dna.frozen.merged, function(x) 100 * x/sum(x))
+dna.frozen.merged.taxphylum <- tax_glom(dna.frozen.merged, "Phylum")
+phylum10 <- names(sort(taxa_sums(dna.frozen.merged.taxphylum), TRUE)[1:10])
+dna.frozen.phylum10 <- prune_taxa(phylum10, dna.frozen.merged.taxphylum)
+
+title <- "Relative Abundance of Bacterial Communities in Frozen Stool Samples"
+sample_data(dna.frozen.phylum10)$Day <- factor(sample_data(dna.frozen.phylum10)$Day, levels = c("0", "3", "7", "14", "21", "40"))
+
+bp.frozen <- plot_bar(dna.frozen.phylum10, "Day", fill = "Phylum", title=title) +
+  scale_fill_manual(breaks = c("Acidobacteria", "Actinobacteria", "Aquificae", "Bacteria_u_p", "Bacteroidetes", "Dictyoglomi", "Euryarchaeota", "Firmicutes", "Proteobacteria", "Verrucomicrobia"),
+                    values = c("lightsteelblue2", "coral2", "cyan", "mediumpurple", "goldenrod", "peachpuff1", "darkorange", "royalblue2", "tan3", "olivedrab3"))
+
+```
+
+```{r}
+test_subset <- subset_samples(st.physeq.dna, Type == "Frozen")
+test_dna <- merge_samples(test_subset, "Day")
+
+test_phylum <- tax_glom(test_dna, "Phylum")
+phylum20 <- names(sort(taxa_sums(test_phylum), TRUE)[1:20])
+test_phylum20 <- prune_taxa(phylum20, test_phylum)
+```
+Acidobacteria = "lightsteelblue2"
+Actinobacteria = "coral2"
+Aquificae = "cyan"
+Bacteria_u_p = "mediumpurple"
+Bacteroidetes = "goldenrod"
+Chloroflexi = "darkseagreen1"
+Dictyoglomi = "peachpuff1"
+Euryarchaeota = "darkorange"
+Firmicutes = "royalblue2"
+Gemmatimonadetes = "plum4"
+Proteobacteria = "tan3"
+Verrumicrobia = "olivedrab3"
+
+```{r}
+plot_grid(bp.mawi, bp.frozen, labels = c("Mawi", "Frozen"), label_size = 8)
+```
+
+```{r}
+obj <- st.physeq.dna.r
+otutable <- data.frame(OTU = rownames(phyloseq::otu_table(obj)@.Data),
+                       phyloseq::otu_table(obj)@.Data,
+                       phyloseq::tax_table(obj)@.Data,
+                       check.names = FALSE)
+
+metadata <- data.frame(phyloseq::sample_data(obj),
+                       check.names = FALSE)
+
+my_ampvis2_object <- amp_load(otutable, metadata)
+
+mawi_ampvis <- amp_subset_samples(my_ampvis2_object,
+                                  Type %in% c("Mawi"),
+                                  normalise = FALSE)
+
+ampvis_dna.genus <- amp_heatmap(my_ampvis2_object,
+                          #group_by = "Day",
+                          facet_by = "Type",
+                          tax_aggregate = "Genus",
+                          tax_add = c("Phylum"),
+                          tax_show = 30,
+                          color_vector = c("white", "darkblue"),
+                          plot_colorscale = "sqrt",
+                          plot_values = TRUE,
+                          plot_values_size = 3) +
+  theme(axis.text.x = element_text(angle = 45, size = 10, vjust = 1),
+        axis.text.y = element_text(size = 10),
+        legend.position = "right") +
+  ggtitle("Genus Abundance By Sample") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+ampvis_dna.species <- amp_heatmap(my_ampvis2_object,
+                          #group_by = "Day",
+                          facet_by = "Type",
+                          tax_aggregate = "Species",
+                          tax_add = c("Phylum"),
+                          tax_show = 30,
+                          color_vector = c("white", "darkblue"),
+                          plot_colorscale = "sqrt",
+                          plot_values = TRUE,
+                          plot_values_size = 3) +
+  theme(axis.text.x = element_text(angle = 45, size = 10, vjust = 1),
+        axis.text.y = element_text(size = 10),
+        legend.position = "right") +
+  ggtitle("Species Abundance By Sample") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+ampvis_day <- amp_heatmap(my_ampvis2_object,
+                          group_by = "Type",
+                          facet_by = "Day",
+                          tax_aggregate = "Species",
+                          tax_add = c("Phylum"),
+                          tax_show = 30,
+                          color_vector = c("white", "darkblue"),
+                          plot_colorscale = "sqrt",
+                          plot_values = TRUE,
+                          plot_values_size = 3) +
+  theme(axis.text.x = element_text(angle = 45, size = 10, vjust = 1),
+        axis.text.y = element_text(size = 10),
+        legend.position = "right") +
+  ggtitle("Species Abundance By Sample Per Day") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+ampvis_day_reps <- amp_heatmap(my_ampvis2_object,
+                          #group_by = "Type",
+                          facet_by = "Day",
+                          tax_aggregate = "Species",
+                          tax_add = c("Phylum"),
+                          tax_show = 30,
+                          color_vector = c("white", "darkblue"),
+                          plot_colorscale = "sqrt",
+                          plot_values = TRUE,
+                          plot_values_size = 3) +
+  theme(axis.text.x = element_text(angle = 45, size = 10, vjust = 1),
+        axis.text.y = element_text(size = 10),
+        legend.position = "right") +
+  ggtitle("Species Abundance By Replicate Per Day") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+```
+
+```{r}
+ampvis_dna.species
+ggsave("ampvis_heatmap_by_species .png",
+       width = 16,
+       height = 9,
+       units = "in")
+```
+
+```{r}
+ampvis_dna.genus
+ggsave("ampvis_heatmap_by_genus .png",
+       width = 16,
+       height = 9,
+       units = "in")
+```
+
+```{r}
+ampvis_day
+ggsave("ampvis_heatmap_by_day .png",
+       width = 16,
+       height = 9,
+       units = "in")
+```
+```{r}
+ampvis_day_reps
+ggsave("ampvis_heatmap_by_day_and_reps.png",
+       width = 16,
+       height = 9,
+       units = "in")
+```
+
+```{r}
+test_phylum <- tax_glom(st.physeq.dna, "Species")
+phylum20 <- names(sort(taxa_sums(test_phylum), TRUE)[1:20])
+test_phylum20 <- prune_taxa(phylum20, test_phylum)
+```
+
+```{r}
+palette_info <- brewer.pal.info[brewer.pal.info$category == "qual", ]
+palette_all <- unlist(mapply(brewer.pal,
+                             palette_info$maxcolors,
+                             rownames(palette_info)))
+
+set.seed(13)
+palette_bar <- sample(palette_all, 20)
+```
+
+```{r}
+bar_species <- plot_bar(test_phylum20, fill = "Species") +
+  theme(legend.key.size = unit(0.3, "cm")) +
+  scale_fill_manual(values = palette_bar)
+bar_species
+```
+
+```{r}
+library(MicrobiotaProcess)
+```
+
+```{r}
+phylumtaxa <- get_taxadf(obj=st.physeq.dna, taxlevel=2)
+pphylum <- ggbartax(obj=phylumtaxa, facetNames="Type") +
+  xlab(NULL) +
+  ylab("relative abundance (%)") +
+  scale_fill_manual(values = c(colorRampPalette(RColorBrewer::brewer.pal(12, "Set3"))(31))) +
+  guides(fill = guide_legend(keywidth = 0.5, keyheight = 0.5))
+
+pphylum
+```
+
+```{r}
+genustaxa <- get_taxadf(obj=st.physeq.dna, taxlevel=6)
+pgenus <- ggbartax(obj=genustaxa, facetNames="Type", topn = 30) +
+  xlab(NULL) +
+  ylab("relative abundance (%)") +
+  scale_fill_manual(values = c(colorRampPalette(RColorBrewer::brewer.pal(12, "Set3"))(31))) +
+  guides(fill = guide_legend(keywidth = 0.5, keyheight = 0.5)) +
+  ggtitle("Genus Abundance By Sample") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+pgenus
+ggsave("ampvis_barchart_genus_top30.png",
+       width = 16,
+       height = 9,
+       units = "in")
+```
+
+```{r}
+speciestaxa <- get_taxadf(obj=st.physeq.dna, taxlevel=7)
+pspecies <- ggbartax(obj=speciestaxa, facetNames="Type", topn = 30) +
+  xlab(NULL) +
+  ylab("relative abundance (%)") +
+  scale_fill_manual(values = c(colorRampPalette(RColorBrewer::brewer.pal(12, "Set3"))(31))) +
+  guides(fill = guide_legend(keywidth = 0.5, keyheight = 0.5)) +
+  ggtitle("Species Abundance By Sample") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+pspecies
+ggsave("ampvis_barchart_species_top30.png",
+       width = 16,
+       height = 9,
+       units = "in")
+```
+
+
+
+```{r}
+library(ggtree)
+hcsample <- get_clust(obj = st.physeq.dna, distmethod = "bray",
+                      method = "hellinger",
+                      hclustmethod = "average")
+
+cplot <- ggclust(obj = hcsample,
+                 layout ="rectangular",
+                 pointsize = 1,
+                 fontsize = 1,
+                 factorNames = c("Type")
+                 ) +
+  scale_color_manual(values = c("#00AED7", "#FD9347")) +
+  theme_tree2(legend.position = "right",
+              plot.title = element_text(face = "bold", lineheight = 25, hjust = 0.5))
+```
+
+```{r}
+cplot
+ggsave("cluster_all_samples_dna.png",
+       width = 16,
+       height = 9,
+       units = "in")
+```
+
+```{r}
+detach("package:MicrobiotaProcess", unload = TRUE)
+```
+
+```{r}
+TypeCategories = levels(get_variable(st.physeq.dna.r, "Day"))
+sample_data(st.physeq.dna.r)$Day <- factor(sample_data(st.physeq.dna.r)$Day, levels = c("0", "3", "7", "14", "21", "40"))
+
+richness.dna.invs <- plot_richness(st.physeq.dna.r,
+                              measures = "invsimpson",
+                              x = "Day",
+                              color = "Type",
+                              shape = NA
+                              ) +
+  geom_boxplot() +
+  geom_point(size = 0) +
+  coord_cartesian(ylim = c(0, 50)) +
+  scale_color_manual(values = c('Frozen' = 'blue', 'Mawi' = '#ff6600'))
+
+richness.dna.chao <- plot_richness(st.physeq.dna.r,
+                              measures = "Chao1",
+                              x = "Day",
+                              color = "Type",
+                              shape = NA,
+                              ) +
+  geom_boxplot() +
+  geom_point(size = 0) +
+  coord_cartesian(ylim = c(0, 350)) +
+  scale_color_manual(values = c('Frozen' = 'blue', 'Mawi' = '#ff6600'))
+
+richness.dna.shannon <- plot_richness(st.physeq.dna.r,
+                              measures = "Shannon",
+                              x = "Day",
+                              color = "Type",
+                              shape = NA
+                              ) +
+  geom_boxplot() +
+  geom_point(size = 0) +
+  #coord_cartesian(ylim = c(0, 4.2)) +
+  scale_color_manual(values = c('Frozen' = 'blue', 'Mawi' = '#ff6600'))
+```
+
+```{r}
+richness.dna.invs
+ggsave("richness_all_samples_dna_invsimpson.png",
+       width = 6,
+       height = 4,
+       units = "in")
+
+richness.dna.chao
+ggsave("richness_all_samples_dna_chao.png",
+       width = 6,
+       height = 4,
+       units = "in")
+
+richness.dna.shannon
+ggsave("richness_all_samples_dna_shannon_2.png",
+       width = 6,
+       height = 4,
+       units = "in")
+```
+Venn Diagram of initial OTU filter
+```{r}
+vennp.day <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      fill=c("#00AED7", "#FD9347"),
+                      cat.col=c("#00AED7", "#FD9347"),
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+
+grid.draw(vennp.day)
+```
+
+```{r}
+st.physeq.dna.mawi.d0 <- subset_samples(st.physeq.dna, Day == "0" & Type == "Mawi")
+st.physeq.dna.mawi.d3 <- subset_samples(st.physeq.dna, Day == "3" & Type == "Mawi")
+st.physeq.dna.mawi.d7 <- subset_samples(st.physeq.dna, Day == "7" & Type == "Mawi")
+st.physeq.dna.mawi.d14 <- subset_samples(st.physeq.dna, Day == "14" & Type == "Mawi")
+st.physeq.dna.mawi.d21 <- subset_samples(st.physeq.dna, Day == "21" & Type == "Mawi")
+st.physeq.dna.mawi.d40 <- subset_samples(st.physeq.dna, Day == "40"& Type == "Mawi")
+
+st.physeq.dna.frozen.d0 <- subset_samples(st.physeq.dna, Day == "0" & Type == "Frozen")
+st.physeq.dna.frozen.d3 <- subset_samples(st.physeq.dna, Day == "3" & Type == "Frozen")
+st.physeq.dna.frozen.d7 <- subset_samples(st.physeq.dna, Day == "7" & Type == "Frozen")
+st.physeq.dna.frozen.d14 <- subset_samples(st.physeq.dna, Day == "14" & Type == "Frozen")
+st.physeq.dna.frozen.d21 <- subset_samples(st.physeq.dna, Day == "21" & Type == "Frozen")
+st.physeq.dna.frozen.d40 <- subset_samples(st.physeq.dna, Day == "40"& Type == "Frozen")
+
+library(MicrobiotaProcess)
+vennlist <- get_vennlist(obj=st.physeq.dna.mawi.d0, factorNames="Pool")
+ItemsList.mawi.d0 <- venn(vennlist, show.plot = FALSE)
+intersections.mawi.d0 <- lengths(attributes(ItemsList.mawi.d0)$intersections)
+matrix.mawi.d0 <- t(
+  matrix(intersections.mawi.d0))
+vennp.mawi.d0 <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      fill=c("orange", "blue", "green"),
+                      cat.col=c("orange", "blue", "green"),
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+
+vennlist <- get_vennlist(obj=st.physeq.dna.mawi.d3, factorNames="Pool")
+ItemsList.mawi.d3 <- venn(vennlist, show.plot = FALSE)
+intersections.mawi.d3 <- lengths(attributes(ItemsList.mawi.d3)$intersections)
+matrix.mawi.d3 <- t(
+  matrix(intersections.mawi.d3))
+vennp.mawi.d3 <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      fill=c("orange", "blue", "green"),
+                      cat.col=c("orange", "blue", "green"),
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+
+vennlist <- get_vennlist(obj=st.physeq.dna.mawi.d7, factorNames="Pool")
+ItemsList.mawi.d7 <- venn(vennlist, show.plot = FALSE)
+intersections.mawi.d7 <- lengths(attributes(ItemsList.mawi.d7)$intersections)
+matrix.mawi.d7 <- t(
+  matrix(intersections.mawi.d7))
+vennp.mawi.d7 <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      fill=c("orange", "blue", "green"),
+                      cat.col=c("orange", "blue", "green"),
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+
+vennlist <- get_vennlist(obj=st.physeq.dna.mawi.d14, factorNames="Pool")
+ItemsList.mawi.d14 <- venn(vennlist, show.plot = FALSE)
+intersections.mawi.d14 <- lengths(attributes(ItemsList.mawi.d14)$intersections)
+matrix.mawi.d14 <- t(
+  matrix(intersections.mawi.d14))
+vennp.mawi.d14 <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      fill=c("orange", "blue", "green"),
+                      cat.col=c("orange", "blue", "green"),
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+
+vennlist <- get_vennlist(obj=st.physeq.dna.mawi.d21, factorNames="Pool")
+ItemsList.mawi.d21 <- venn(vennlist, show.plot = FALSE)
+intersections.mawi.d21 <- lengths(attributes(ItemsList.mawi.d21)$intersections)
+matrix.mawi.d21 <- t(
+  matrix(intersections.mawi.d21))
+vennp.mawi.d21 <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      fill=c("orange", "blue", "green"),
+                      cat.col=c("orange", "blue", "green"),
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+
+vennlist <- get_vennlist(obj=st.physeq.dna.mawi.d40, factorNames="Pool")
+ItemsList.mawi.d40 <- venn(vennlist, show.plot = FALSE)
+intersections.mawi.d40 <- lengths(attributes(ItemsList.mawi.d40)$intersections)
+matrix.mawi.d40 <- t(
+  matrix(intersections.mawi.d40))
+vennp.mawi.d40 <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      fill=c("orange", "blue", "green"),
+                      cat.col=c("orange", "blue", "green"),
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+
+vennlist <- get_vennlist(obj=st.physeq.dna.frozen.d0, factorNames="Pool")
+ItemsList.frozen.d0 <- venn(vennlist, show.plot = FALSE)
+intersections.frozen.d0 <- lengths(attributes(ItemsList.frozen.d0)$intersections)
+matrix.frozen.d0 <- t(
+  matrix(intersections.frozen.d0))
+vennp.frozen.d0 <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      fill=c("orange", "blue", "green"),
+                      cat.col=c("orange", "blue", "green"),
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+
+vennlist <- get_vennlist(obj=st.physeq.dna.frozen.d3, factorNames="Pool")
+ItemsList.frozen.d3 <- venn(vennlist, show.plot = FALSE)
+intersections.frozen.d3 <- lengths(attributes(ItemsList.frozen.d3)$intersections)
+matrix.frozen.d3 <- t(
+  matrix(intersections.frozen.d3))
+vennp.frozen.d3 <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      fill=c("orange", "blue", "green"),
+                      cat.col=c("orange", "blue", "green"),
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+
+vennlist <- get_vennlist(obj=st.physeq.dna.frozen.d7, factorNames="Pool")
+ItemsList.frozen.d7 <- venn(vennlist, show.plot = FALSE)
+intersections.frozen.d7 <- lengths(attributes(ItemsList.frozen.d7)$intersections)
+matrix.frozen.d7 <- t(
+  matrix(intersections.frozen.d7))
+vennp.frozen.d7 <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      fill=c("orange", "blue", "green"),
+                      cat.col=c("orange", "blue", "green"),
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+
+vennlist <- get_vennlist(obj=st.physeq.dna.frozen.d14, factorNames="Pool")
+ItemsList.frozen.d14 <- venn(vennlist, show.plot = FALSE)
+intersections.frozen.d14 <- lengths(attributes(ItemsList.frozen.d14)$intersections)
+matrix.frozen.d14 <- t(
+  matrix(intersections.frozen.d14))
+vennp.frozen.d14 <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      fill=c("orange", "blue", "green"),
+                      cat.col=c("orange", "blue", "green"),
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+
+vennlist <- get_vennlist(obj=st.physeq.dna.frozen.d21, factorNames="Pool")
+ItemsList.frozen.d21 <- venn(vennlist, show.plot = FALSE)
+intersections.frozen.d21 <- lengths(attributes(ItemsList.frozen.d21)$intersections)
+matrix.frozen.d21 <- t(
+  matrix(intersections.frozen.d21))
+vennp.frozen.d21 <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      fill=c("orange", "blue", "green"),
+                      cat.col=c("orange", "blue", "green"),
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+
+vennlist <- get_vennlist(obj=st.physeq.dna.frozen.d40, factorNames="Pool")
+ItemsList.frozen.d40 <- venn(vennlist, show.plot = FALSE)
+intersections.frozen.d40 <- lengths(attributes(ItemsList.frozen.d40)$intersections)
+matrix.frozen.d40 <- t(
+  matrix(intersections.frozen.d40))
+vennp.frozen.d40 <- venn.diagram(vennlist,
+                      height=5,
+                      width=5, 
+                      filename=NULL, 
+                      fill=c("orange", "blue", "green"),
+                      cat.col=c("orange", "blue", "green"),
+                      alpha = 0.85, 
+                      fontfamily = "serif",
+                      fontface = "bold",
+                      cex = 1.2,
+                      cat.cex = 1.3,
+                      cat.default.pos = "outer",
+                      cat.dist=0.1,
+                      margin = 0.1, 
+                      lwd = 3,
+                      lty ='dotted',
+                      imagetype = "svg")
+```
+
+```{r}
+#extract list of elements from the venn diagram
+all_intersections <- rbind(matrix.mawi.d0, matrix.mawi.d3, matrix.mawi.d7, matrix.mawi.d14, matrix.mawi.d21, matrix.mawi.d40, matrix.frozen.d0, matrix.frozen.d3, matrix.frozen.d7, matrix.frozen.d14, matrix.frozen.d21, matrix.frozen.d40)
+all_intersections <- 
+  data.frame(all_intersections)
+rownames(all_intersections) <- c("Mawi_D0", "Mawi_D03", "Mawi_D07", "Mawi_D14", "Mawi_D21", "Mawi_D40", "Frozen_D0", "Frozen_D03", "Frozen_D07", "Frozen_D14", "Frozen_D21", "Frozen_D40")
+all_intersections
+
+all_intersections <- tibble::rownames_to_column(all_intersections, "Sample_Day")
+ggplot(data = all_intersections, aes(x = "Sample_Day", y = all_intersections[, 2:7]))
+```
+
+####### Use this ####### 
+#So, remove samples with less than 10000 reads, depth = 10000
+#D3.S2 (2), D1.S2 (417) were excluded
+#Next size is 9923 for D3.S3
+Succ_cl.physeqFf = prune_samples(sample_sums(Succ_cl.physeqF2)>=9900, Succ_cl.physeqF2)
+Succ_cl.physeqFf #4229 taxa and 84 samples #12661 (w/o sample instances)
+
+#### Rarefied and filtered OTU table ####
+##############################################
+# Initialize matrices to store richness and evenness estimates
+```{r}
+nsamp = nsamples(st.physeq.dna)
+trials = 100
+```
+
+```{r}
+richness <- matrix(nrow = nsamp, ncol = trials)
+row.names(richness) <- sample_names(st.physeq.dna)
+
+evenness <- matrix(nrow = nsamp, ncol = trials)
+row.names(evenness) <- sample_names(st.physeq.dna)
+```
+
+```{r}
+# Set seed for reproducibility
+set.seed(13)
+for (i in 1:100) {
+  # Subsample 100 times and trim OTUs with total nseq=0
+  st.physeq.dna.rar <- rarefy_even_depth(st.physeq.dna, sample.size = 30000, verbose = FALSE, replace = TRUE, trimOTUs = TRUE)
+  
+  # Calculate richness
+  rich <- 
+    numeric(
+    matrix(estimate_richness(st.physeq.dna.rar, measures = "Observed")))
+  richness[ ,i] <- rich
+  
+  # Calculate evenness
+  even <- 
+    numeric(
+    matrix(estimate_richness(st.physeq.dna.r, measures = "InvSimpson")))
+  evenness[ ,i] <- even
+  
+}
+```
+
+```{r}
+#### Rarefied and filtered OTU table  ####
+st.physeq.dna.rar # 425 taxa and 36 samples
+
+sum(taxa_sums(st.physeq.dna.rar) == 0) #0
+sum(taxa_sums(st.physeq.dna.rar) == 1) #28
+sum(taxa_sums(st.physeq.dna.rar) == 2) #19
+```
+
+```{r}
+# Reorder Type factor
+TypeCategories = levels(get_variable(st.physeq.dna.rar, "Day"))
+sample_data(st.physeq.dna.rar)$Day <- factor(sample_data(st.physeq.dna.rar)$Day, levels = c("0", "3", "7", "14", "21", "40"))
+
+```
+
+```{r}
+# Create a new dataframe to hold the means and standard deviations of richness estimates
+ID <- row.names(richness)
+mean <- apply(richness, 1, mean)
+sd <- apply(richness, 1, sd)
+measure <- rep("Richness", nsamp)
+rich_stats <- data.frame(ID, mean, sd, measure)
+# Create a new dataframe to hold the means and standard deviations of evenness estimates
+ID <- row.names(evenness)
+mean <- apply(evenness, 1, mean)
+sd <- apply(evenness, 1, sd)
+measure <- rep("Inverse Simpson", nsamp)
+even_stats <- data.frame(ID, mean, sd, measure)
+# Combine our estimates for richness and evenness into one dataframe
+alpha <- rbind(rich_stats, even_stats)
+#write.table(alpha, file = "VF.rarefied.alpha.xls", sep = "\t", col.names=NA)
+# Letâs add the sample metadata into this dataframe using the merge() command
+s <- data.frame(sample_data(st.physeq.dna.rar))
+alphadiv <- merge(alpha, s, by = "ID") 
+```
+
+```{r}
+# Plot 
+ggplot(alphadiv, aes(x = Type, y = mean, color = Type, group = Type)) +
+  geom_point(size = 2) + 
+  geom_line(size = 0.8) #+
+  #facet_wrap(Plant~Succession, scales = 'free_y') 
+```
+
+```{r
+alpha_meas = c("Observed", "Chao1", "Shannon", "InvSimpson")
+alpha_p <- plot_richness(Succ_cl.physeqFf.rar, "Plant", measures=alpha_meas)
+alpha_p + geom_point(size = 4, alpha = 0.7)
+alpha_p2 <- plot_richness(Succ_cl.physeqFf.rar, "Plant", color = "Succession", measures=alpha_meas)
+alpha_p2 + geom_boxplot()
+
+#richness - anova test
+#load "a.diversity.anova.R"
+
+#Plants only
+Succ_cl.physeqFf.rar_noMG_Plants <- subset_samples(Succ_cl.physeqFf.rar_noMG, Type == "Plants")
+rich_anova <- plot_anova_diversity(Succ_cl.physeqFf.rar_noMG_Plants, method = c("richness", "invsimpson"), 
+                                  grouping_column = "Succession", pValueCutoff = 0.05)
+p_alpha_anova <- rich_anova + scale_fill_viridis(discrete=TRUE, option = "E") + theme(axis.text.x=element_text(angle=0))
+
+
+#DP - there are no "Succession" levels for Soil, one time point samples only
+Succ_cl.physeqFf.rar_noMG_DP <- subset_samples(Succ_cl.physeqFf.rar_noMG, !Type == "Plants" & !Type == "Soil")
+rich_anova_DP <- plot_anova_diversity(Succ_cl.physeqFf.rar_noMG_DP, method = c("richness", "invsimpson"), 
+                                   grouping_column = "Succession", pValueCutoff = 0.1)
+DP_alpha_anova <- rich_anova_DP + scale_fill_viridis(discrete=TRUE, option = "E") + theme(axis.text.x=element_text(angle=0))
+```
